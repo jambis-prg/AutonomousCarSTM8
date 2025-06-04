@@ -15,20 +15,22 @@
 #define ULTRASONIC_ECHO_PIN GPIO_PIN_2
 
 static void CLK_Config(void);
-static void TIM1_Config(void);
 static void TIM2_Config(void);
 static void GPIO_Config(void);
 
+static void Delay_two_us(uint8_t step_delay);
+
+static uint8_t Get_Distance(void);
+
 typedef enum { WALKING, STOP, TURNING } State;
 
-uint32_t duty = 0;
+uint16_t duty = 0;
 State current_state = WALKING;
 uint8_t step_count = 0, last_step_count = 0;
 
 int main(void)
 {
 	CLK_Config();
-	TIM1_Config();
 	TIM2_Config();
 	GPIO_Config();
 	
@@ -77,18 +79,6 @@ static void CLK_Config(void)
 	CLK_HSIPrescalerConfig(CLK_PRESCALER_HSIDIV8);
 	CLK_HSICmd(ENABLE);
 	CLK_PeripheralClockConfig(CLK_PERIPHERAL_TIMER2, ENABLE); // Habilita o clock para o TIM2
-}
-
-static void TIM1_Config(void)
-{
-	TIM1_DeInit();
-	// 2mhz / 2k = 1000 -> 1 / 1000 = 1ms
-	// Estouro do timer toda vez que chega em 10, (9 + 1) = 10, 1ms * 10 = 10ms
-	TIM1_TimeBaseInit(2000, TIM1_COUNTERMODE_UP, 9, 0);
-	
-	TIM1_ITConfig(TIM1_IT_UPDATE, ENABLE);
-	
-	TIM1_Cmd(ENABLE);
 }
 
 static void TIM2_Config(void)
@@ -140,11 +130,6 @@ static void GPIO_Config(void)
 	// -------------------------------------------------------------------------------
 }
 
-@far @interrupt void TIM1_IRQHandler(void)
-{
-	TIM1_ClearITPendingBit(TIM1_IT_UPDATE); // Limpando bit de interrupção
-}
-
 // Interrupção a cada 5ms
 @far @interrupt void TIM2_IRQHandler(void)
 {
@@ -156,4 +141,22 @@ static void GPIO_Config(void)
 @far @interrupt void Echo_IRQHandler(void)
 {
 	
+}
+
+static uint8_t Get_Distance(void)
+{
+	GPIO_WriteLow(ULTRASONIC_PORT, ULTRASONIC_TRIGGER_PIN);
+	
+	// Usar assembly para delays de 2us
+  
+	GPIO_WriteHigh(ULTRASONIC_PORT, ULTRASONIC_TRIGGER_PIN);
+  
+	// Usar assembly para delays de 10us
+  
+	GPIO_WriteLow(ULTRASONIC_PORT, ULTRASONIC_TRIGGER_PIN);
+
+  // Medir o tempo do pulso de echo
+	
+  // Calcula a distância em centímetros
+  // distance = (duration / 2.0) * 0.0343;
 }
