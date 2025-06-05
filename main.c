@@ -16,23 +16,25 @@
 
 static void CLK_Config(void);
 static void TIM2_Config(void);
+static void TIM4_Config(void);
 static void GPIO_Config(void);
 
 static void Delay_two_us(uint8_t step_delay);
 
-static uint8_t Get_Distance(void);
+static uint8_t Has_Object(void);
 
 typedef enum { WALKING, STOP, TURNING } State;
 
 uint16_t duty = 0;
 State current_state = WALKING;
 uint8_t step_count = 0, last_step_count = 0;
-volatile uint8_t echo_received = 0;
+volatile uint8_t echo_received = 0, timeout = 0;
 
 int main(void)
 {
 	CLK_Config();
 	TIM2_Config();
+	TIM4_Config();
 	GPIO_Config();
 	
 	enableInterrupts();
@@ -45,7 +47,7 @@ int main(void)
 			if (step_count < 200) // Passa 1 segundo andando
 			{
 				// Checa sensor de proximidade
-				if (Get_Distance() != 0)
+				if (Has_Object() != 0)
 				{
 					current_state = STOP;
 					last_step_count = step_count;
@@ -59,7 +61,7 @@ int main(void)
 			break;
 		case STOP:
 			// Checa sensor e caso não retorne mais nada volta para WALKING
-			if (Get_Distance() == 0)
+			if (Has_Object() == 0)
 			{
 				step_count = last_step_count;
 				current_state = WALKING;
@@ -103,6 +105,16 @@ static void TIM2_Config(void)
 	TIM2_Cmd(ENABLE);
 }
 
+static void TIM4_Config(void)
+{
+	TIM4_DeInit();
+	
+	TIM4_TimeBaseInit(TIM4_PRESCALER_128, 9);
+	TIM4_ITConfig(TIM4_IT_UPDATE, ENABLE);
+	
+	TIM4_Cmd(ENABLE);
+}
+
 static void GPIO_Config(void)
 {
 	// ------------------ Incializando Motores ---------------------
@@ -134,7 +146,7 @@ static void GPIO_Config(void)
 	GPIO_Init(ULTRASONIC_PORT, ULTRASONIC_ECHO_PIN, GPIO_MODE_IN_FL_IT);
 	
 	// Interrupção do Echo na transição de subida
-	EXTI_SetExtIntSensitivity(EXTI_PORT_GPIOA, EXTI_SENSITIVITY_RISE_ONLY);
+	EXTI_SetExtIntSensitivity(EXTI_PORT_GPIOA, EXTI_SENSITIVITY_FALL_ONLY);
 	
 	// -------------------------------------------------------------------------------
 }
@@ -147,70 +159,52 @@ static void GPIO_Config(void)
 	step_count++;
 }
 
-@far @interrupt void Echo_IRQHandler(void)
+// Interrupção a cada 640us
+@far @interrupt void TIM4_IRQHandler(void)
 {
-	echo_received = 1;
+	TIM4_ClearITPendingBit(TIM4_IT_UPDATE);
+	
+	timeout = 1;
 }
 
-static uint8_t Get_Distance(void)
+@far @interrupt void Echo_IRQHandler(void)
+{
+	if ((PA_IDR & ULTRASONIC_ECHO_PIN) == 0)
+		echo_received = 1;
+}
+
+static uint8_t Has_Object(void)
 {
 	GPIO_WriteLow(ULTRASONIC_PORT, ULTRASONIC_TRIGGER_PIN);
-	
-	// 2us de delay
-	// 1 NOP = 1 ciclo de clock, 1 / 2mhz = 0,5us -> 0,5 * 4 = 2us
-#asm
-	nop
-	nop
-	nop
-	nop
-#endasm
-  
 	GPIO_WriteHigh(ULTRASONIC_PORT, ULTRASONIC_TRIGGER_PIN);
-  
-	// 10us de delay
-	// 1 NOP = 1 ciclo de clock, 1 / 2mhz = 0,5us -> 0,5 * 20 = 2us
-#asm
-	nop
-	nop
-	nop
-	nop
-	nop
-	nop
-	nop
-	nop
-	nop
-	nop
-	nop
-	nop
-	nop
-	nop
-	nop
-	nop
-	nop
-	nop
-	nop
-	nop
-#endasm
-  
 	GPIO_WriteLow(ULTRASONIC_PORT, ULTRASONIC_TRIGGER_PIN);
-
-// Espera ocupada que conta quantos ciclos de máquina se passaram até o echo receber algum dado
-// Cada ciclo de máquina no caso são 0,5us, a menor medida permite medir 3us e a maior 127,5us
-// Ou seja, a medida máxima é de 2,19cm aproximadamente
+	
+	echo_received = 0;
+	timeout = 0;
+	TIM4->CNTR = 0;
+	
+	GPIOA->CR2 |= 0x01; // Habilita interrupção do echo
+	TIM4->IER |= 0x01; // Habilita a interrupção do timer 4
+	
 #asm
-	ld a, $0 // 1 ciclo
-	
 echo_loop:
-	add a, $6 // 1 ciclo, adiciona 4 ciclos no acumulador
-	tnz _echo_received // 1 ciclo, Z = 1 se echo_received for false e Z = 0 caso true
-	jrne echo_loop_exit // 1 a 2 ciclos, sai do loop se Z = 0
-	tnz a // 1 ciclo
-	jreq echo_loop_exit // 1 a 2 ciclos
-	jp echo_loop // 1 ciclo
+	wfi // Espera por interrupção
+	tnz _echo_received // Checa se echo_received == 0
+	jrne echo_loop_exit_true // Se Z != 0 pula para saida
+	tnz _timeout // Checa se timeout == 0
+	jrne echo_loop_exit_false // Se Z != 0 pula para saida
+	jp echo_loop // Volta para o loop
 	
-echo_loop_exit:
-	sub a, $1 // subtrai 1 ciclo pois o jump n pulou
-	clr _echo_received // Limpa o echo_received
+	echo_loop_exit_true:
+	ld a, $1
+	jp exit
+	
+	echo_loop_exit_false:
+	clr a
+	
+	exit:
+	bres _PA_CR2, #0
+	bres _TIM4_IER, #0
 	ret
 #endasm
 }

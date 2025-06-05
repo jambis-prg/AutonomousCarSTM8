@@ -6,7 +6,7 @@
 
 /* Incluir os headers dos periféricos que você vai usar */
 #include "stm8s_clk.h"
-#include "stm8s_tim1.h"
+#include "stm8s_tim4.h"
 #include "stm8s_tim2.h"
 #include "stm8s_gpio.h"
 #include "stm8s_exti.h"
