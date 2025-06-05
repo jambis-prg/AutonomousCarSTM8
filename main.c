@@ -27,6 +27,7 @@ typedef enum { WALKING, STOP, TURNING } State;
 uint16_t duty = 0;
 State current_state = WALKING;
 uint8_t step_count = 0, last_step_count = 0;
+volatile uint8_t echo_received = 0;
 
 int main(void)
 {
@@ -44,7 +45,11 @@ int main(void)
 			if (step_count < 200) // Passa 1 segundo andando
 			{
 				// Checa sensor de proximidade
-				// current_state = STOP;
+				if (Get_Distance() != 0)
+				{
+					current_state = STOP;
+					last_step_count = step_count;
+				}
 			}
 			else // Após 1 segundo andando deve girar
 			{
@@ -54,7 +59,11 @@ int main(void)
 			break;
 		case STOP:
 			// Checa sensor e caso não retorne mais nada volta para WALKING
-			// step_count = last_step_count;
+			if (Get_Distance() == 0)
+			{
+				step_count = last_step_count;
+				current_state = WALKING;
+			}
 			break;
 		case TURNING:
 			if (step_count > 150) // Após 750ms de giro deve voltar a andar
@@ -140,23 +149,68 @@ static void GPIO_Config(void)
 
 @far @interrupt void Echo_IRQHandler(void)
 {
-	
+	echo_received = 1;
 }
 
 static uint8_t Get_Distance(void)
 {
 	GPIO_WriteLow(ULTRASONIC_PORT, ULTRASONIC_TRIGGER_PIN);
 	
-	// Usar assembly para delays de 2us
+	// 2us de delay
+	// 1 NOP = 1 ciclo de clock, 1 / 2mhz = 0,5us -> 0,5 * 4 = 2us
+#asm
+	nop
+	nop
+	nop
+	nop
+#endasm
   
 	GPIO_WriteHigh(ULTRASONIC_PORT, ULTRASONIC_TRIGGER_PIN);
   
-	// Usar assembly para delays de 10us
+	// 10us de delay
+	// 1 NOP = 1 ciclo de clock, 1 / 2mhz = 0,5us -> 0,5 * 20 = 2us
+#asm
+	nop
+	nop
+	nop
+	nop
+	nop
+	nop
+	nop
+	nop
+	nop
+	nop
+	nop
+	nop
+	nop
+	nop
+	nop
+	nop
+	nop
+	nop
+	nop
+	nop
+#endasm
   
 	GPIO_WriteLow(ULTRASONIC_PORT, ULTRASONIC_TRIGGER_PIN);
 
-  // Medir o tempo do pulso de echo
+// Espera ocupada que conta quantos ciclos de máquina se passaram até o echo receber algum dado
+// Cada ciclo de máquina no caso são 0,5us, a menor medida permite medir 3us e a maior 127,5us
+// Ou seja, a medida máxima é de 2,19cm aproximadamente
+#asm
+	ld a, $0 // 1 ciclo
 	
-  // Calcula a distância em centímetros
-  // distance = (duration / 2.0) * 0.0343;
+echo_loop:
+	add a, $6 // 1 ciclo, adiciona 4 ciclos no acumulador
+	tnz _echo_received // 1 ciclo, Z = 1 se echo_received for false e Z = 0 caso true
+	jrne echo_loop_exit // 1 a 2 ciclos, sai do loop se Z = 0
+	tnz a // 1 ciclo
+	jreq echo_loop_exit // 1 a 2 ciclos
+	jp echo_loop // 1 ciclo
+	
+echo_loop_exit:
+	sub a, $1 // subtrai 1 ciclo pois o jump n pulou
+	clr _echo_received // Limpa o echo_received
+	ret
+#endasm
 }
