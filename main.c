@@ -49,12 +49,18 @@ int main(void)
 				// Checa sensor de proximidade
 				if (Has_Object() != 0)
 				{
+					GPIO_WriteLow(MOTOR_PORT, MOTOR_L1_PIN);
+					GPIO_WriteLow(MOTOR_PORT, MOTOR_R1_PIN);
+					
 					current_state = STOP;
 					last_step_count = step_count;
 				}
 			}
 			else // Após 1 segundo andando deve girar
 			{
+				GPIO_WriteLow(MOTOR_PORT, MOTOR_L1_PIN);
+				GPIO_WriteHigh(MOTOR_PORT, MOTOR_L2_PIN);
+				
 				step_count = 0;
 				current_state = TURNING;
 			}
@@ -63,6 +69,9 @@ int main(void)
 			// Checa sensor e caso não retorne mais nada volta para WALKING
 			if (Has_Object() == 0)
 			{
+				GPIO_WriteHigh(MOTOR_PORT, MOTOR_L1_PIN);
+				GPIO_WriteHigh(MOTOR_PORT, MOTOR_R1_PIN);
+				
 				step_count = last_step_count;
 				current_state = WALKING;
 			}
@@ -70,6 +79,9 @@ int main(void)
 		case TURNING:
 			if (step_count > 150) // Após 750ms de giro deve voltar a andar
 			{
+				GPIO_WriteHigh(MOTOR_PORT, MOTOR_L1_PIN);
+				GPIO_WriteLow(MOTOR_PORT, MOTOR_L2_PIN);
+				
 				step_count = 0;
 				current_state = WALKING;
 			}
@@ -110,9 +122,9 @@ static void TIM4_Config(void)
 	TIM4_DeInit();
 	
 	TIM4_TimeBaseInit(TIM4_PRESCALER_128, 9);
-	TIM4_ITConfig(TIM4_IT_UPDATE, ENABLE);
+	TIM4_ITConfig(TIM4_IT_UPDATE, DISABLE); // Não habilita interrupção do timer 4 ainda
 	
-	TIM4_Cmd(ENABLE);
+	TIM4_Cmd(DISABLE); // Não habilita o timer 4 ainda
 }
 
 static void GPIO_Config(void)
@@ -125,14 +137,14 @@ static void GPIO_Config(void)
 	GPIO_Init(MOTOR_PORT, MOTOR_L1_PIN, GPIO_MODE_OUT_PP_LOW_FAST);
 	GPIO_Init(MOTOR_PORT, MOTOR_L2_PIN, GPIO_MODE_OUT_PP_LOW_FAST);
 	
-	GPIO_WriteLow(MOTOR_PORT, MOTOR_L1_PIN);
+	GPIO_WriteHigh(MOTOR_PORT, MOTOR_L1_PIN);
 	GPIO_WriteLow(MOTOR_PORT, MOTOR_L2_PIN);
 	
 	// Motor Direito
 	GPIO_Init(MOTOR_PORT, MOTOR_R1_PIN, GPIO_MODE_OUT_PP_LOW_FAST);
 	GPIO_Init(MOTOR_PORT, MOTOR_R2_PIN, GPIO_MODE_OUT_PP_LOW_FAST);
 	
-	GPIO_WriteLow(MOTOR_PORT, MOTOR_R1_PIN);
+	GPIO_WriteHigh(MOTOR_PORT, MOTOR_R1_PIN);
 	GPIO_WriteLow(MOTOR_PORT, MOTOR_R2_PIN);
 	
 	// -------------------------------------------------------------
@@ -147,6 +159,7 @@ static void GPIO_Config(void)
 	
 	// Interrupção do Echo na transição de subida
 	EXTI_SetExtIntSensitivity(EXTI_PORT_GPIOA, EXTI_SENSITIVITY_FALL_ONLY);
+	ULTRASONIC_PORT->CR2 &= (uint8_t)(~0x01); // Desabilita a interrupção do echo
 	
 	// -------------------------------------------------------------------------------
 }
@@ -169,24 +182,33 @@ static void GPIO_Config(void)
 
 @far @interrupt void Echo_IRQHandler(void)
 {
-	if ((PA_IDR & ULTRASONIC_ECHO_PIN) == 0)
-		echo_received = 1;
+	echo_received = 1;
 }
 
 static uint8_t Has_Object(void)
 {
-	GPIO_WriteLow(ULTRASONIC_PORT, ULTRASONIC_TRIGGER_PIN);
-	GPIO_WriteHigh(ULTRASONIC_PORT, ULTRASONIC_TRIGGER_PIN);
-	GPIO_WriteLow(ULTRASONIC_PORT, ULTRASONIC_TRIGGER_PIN);
-	
-	echo_received = 0;
-	timeout = 0;
-	TIM4->CNTR = 0;
-	
-	GPIOA->CR2 |= 0x01; // Habilita interrupção do echo
-	TIM4->IER |= 0x01; // Habilita a interrupção do timer 4
-	
 #asm
+	bres _PA_ODR, #0 // Reseta pino de trigger, Write Low
+	
+	// Delay 2us
+	nop
+	nop
+	nop
+	ld a, #3 // 1 ciclo, coloca o valor 3 para o delay debaixo
+	
+	bset _PA_ODR, #0 // Seta pino de trigger, Write High
+	
+	// Delay 10us
+loop:
+	dec a // 1 ciclo
+	jrne loop // 2 ciclos
+	
+	bres _PA_ODR, #0 // Reseta pino de trigger, Write Low
+	
+	bset _PA_CR2, #0 // Habilita interrupção do echo
+	bset _TIM4_IER, #0 // Habilita a interrupção do timer 4
+	bset _TIM4_CR1, #0 // Habilita o timer
+
 echo_loop:
 	wfi // Espera por interrupção
 	tnz _echo_received // Checa se echo_received == 0
@@ -196,15 +218,19 @@ echo_loop:
 	jp echo_loop // Volta para o loop
 	
 	echo_loop_exit_true:
-	ld a, $1
+	ld a, #1 // a = 1
 	jp exit
 	
 	echo_loop_exit_false:
-	clr a
+	clr a // a = 0
 	
 	exit:
-	bres _PA_CR2, #0
-	bres _TIM4_IER, #0
-	ret
+	bres _PA_CR2, #0 // Desabilita interrupção do echo
+	bres _TIM4_IER, #0 // Desabilita interrupção do timer 4
+	bres _TIM4_CR1, #0 // Desabilita o timer
+	clr _TIM4_CNTR // Limpa contador do timer
+	clr _echo_received // Limpa echo
+	clr _timeout // Limpa timeout
+	ret // return a
 #endasm
 }
